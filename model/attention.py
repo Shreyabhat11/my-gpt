@@ -1,7 +1,7 @@
 """
-Multi-Head Causal Self Attention
+Multi-Head Causal Self-Attention.
 
-Production-style implementation inspired by GPT-2/NanoGPT.
+Production-oriented implementation for a decoder-only GPT.
 
 Author: Shreya Bhat
 """
@@ -9,7 +9,6 @@ Author: Shreya Bhat
 from __future__ import annotations
 
 import math
-from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -17,9 +16,17 @@ import torch.nn.functional as F
 
 from configs.model_config import GPTConfig
 
-from configs.model_config import GPTConfig
 
 class MultiHeadSelfAttention(nn.Module):
+    """
+    Multi-Head Causal Self-Attention.
+
+    Input:
+        x -> (batch_size, sequence_length, embed_dim)
+
+    Output:
+        out -> (batch_size, sequence_length, embed_dim)
+    """
 
     def __init__(
         self,
@@ -28,29 +35,70 @@ class MultiHeadSelfAttention(nn.Module):
 
         super().__init__()
 
+        # ======================================================
+        # Configuration
+        # ======================================================
+
         self.embed_dim = config.embed_dim
         self.num_heads = config.num_heads
         self.head_dim = config.head_dim
 
+        self.dropout = config.dropout
+
+        # Scaling factor:
+        #
+        # attention = QK^T / sqrt(head_dim)
+        #
         self.scale = self.head_dim ** -0.5
 
+        # ======================================================
+        # Validation
+        # ======================================================
+
+        if self.embed_dim % self.num_heads != 0:
+            raise ValueError(
+                f"embed_dim ({self.embed_dim}) must be divisible "
+                f"by num_heads ({self.num_heads})"
+            )
+
+        # ======================================================
+        # QKV Projection
+        # ======================================================
+
         self.qkv = nn.Linear(
-            config.embed_dim,
-            3 * config.embed_dim,
+            self.embed_dim,
+            3 * self.embed_dim,
             bias=config.bias,
         )
+
+        # ======================================================
+        # Output Projection
+        # ======================================================
 
         self.out_proj = nn.Linear(
-            config.embed_dim,
-            config.embed_dim,
+            self.embed_dim,
+            self.embed_dim,
             bias=config.bias,
         )
 
-        self.attn_dropout = nn.Dropout(config.dropout)
-        self.resid_dropout = nn.Dropout(config.dropout)
+        # ======================================================
+        # Dropout
+        # ======================================================
+
+        self.attn_dropout = nn.Dropout(
+            config.dropout
+        )
+
+        self.resid_dropout = nn.Dropout(
+            config.dropout
+        )
+
+        # ======================================================
+        # Causal Mask
+        # ======================================================
 
         self.register_buffer(
-            "mask",
+            "causal_mask",
             torch.tril(
                 torch.ones(
                     config.context_length,
@@ -61,36 +109,72 @@ class MultiHeadSelfAttention(nn.Module):
             persistent=False,
         )
 
+    # ==========================================================
+    # Forward
+    # ==========================================================
+
     def forward(
         self,
         x: torch.Tensor,
         return_attention: bool = False,
-    ) -> torch.Tensor | Tuple[torch.Tensor, torch.Tensor]:
+    ) -> torch.Tensor | tuple[
+        torch.Tensor,
+        torch.Tensor,
+    ]:
 
-        batch_size, seq_length, embed_dim = x.shape
+        # ------------------------------------------------------
+        # Input
+        # ------------------------------------------------------
 
-        # ---------------------------------------------------
-        # Compute Query, Key and Value
-        # ---------------------------------------------------
+        batch_size, sequence_length, embed_dim = x.shape
+
+        if embed_dim != self.embed_dim:
+            raise ValueError(
+                f"Expected embedding dimension {self.embed_dim}, "
+                f"got {embed_dim}."
+            )
+
+        if sequence_length > self.causal_mask.size(0):
+            raise ValueError(
+                f"Sequence length ({sequence_length}) exceeds "
+                f"context length ({self.causal_mask.size(0)})."
+            )
+
+        # ------------------------------------------------------
+        # QKV Projection
+        #
+        # (B, T, C)
+        #
+        # ->
+        #
+        # (B, T, 3C)
+        # ------------------------------------------------------
 
         qkv = self.qkv(x)
 
-        q, k, v = qkv.chunk(3, dim=-1)
+        q, k, v = qkv.chunk(
+            3,
+            dim=-1,
+        )
 
-        # ---------------------------------------------------
-        # Split into heads
+        # ------------------------------------------------------
+        # Split into Attention Heads
         #
-        # (B,T,C)
+        # (B, T, C)
+        #
         # ->
-        # (B,T,H,D)
+        #
+        # (B, T, H, D)
+        #
         # ->
-        # (B,H,T,D)
-        # ---------------------------------------------------
+        #
+        # (B, H, T, D)
+        # ------------------------------------------------------
 
         q = (
             q.view(
                 batch_size,
-                seq_length,
+                sequence_length,
                 self.num_heads,
                 self.head_dim,
             )
@@ -100,7 +184,7 @@ class MultiHeadSelfAttention(nn.Module):
         k = (
             k.view(
                 batch_size,
-                seq_length,
+                sequence_length,
                 self.num_heads,
                 self.head_dim,
             )
@@ -110,93 +194,171 @@ class MultiHeadSelfAttention(nn.Module):
         v = (
             v.view(
                 batch_size,
-                seq_length,
+                sequence_length,
                 self.num_heads,
                 self.head_dim,
             )
             .transpose(1, 2)
         )
 
-        # ---------------------------------------------------
-        # Attention Scores
-        # (B,H,T,D) x (B,H,D,T)
-        # ->
-        # (B,H,T,T)
-        # ---------------------------------------------------
+        # ======================================================
+        # Attention
+        # ======================================================
 
-        scores = (q @ k.transpose(-2, -1)) * self.scale
+        if return_attention:
 
-        # Apply causal mask
-        causal_mask = self.mask[:seq_length, :seq_length]
+            # --------------------------------------------------
+            # Explicit implementation.
+            #
+            # Useful when we actually want the attention matrix.
+            # --------------------------------------------------
 
-        scores = scores.masked_fill(
-            ~causal_mask,
-            float("-inf"),
-        )
+            scores = (
+                q @ k.transpose(-2, -1)
+            ) * self.scale
 
-        attention = F.softmax(scores, dim=-1)
+            causal_mask = self.causal_mask[
+                :sequence_length,
+                :sequence_length,
+            ]
 
-        attention = self.attn_dropout(attention)
+            scores = scores.masked_fill(
+                ~causal_mask,
+                torch.finfo(scores.dtype).min,
+            )
 
-        # ---------------------------------------------------
-        # Weighted Sum
-        # ---------------------------------------------------
+            attention = F.softmax(
+                scores,
+                dim=-1,
+            )
 
-        out = attention @ v
+            attention = self.attn_dropout(
+                attention
+            )
 
-        # ---------------------------------------------------
+            out = attention @ v
+
+        else:
+
+            # --------------------------------------------------
+            # Optimized PyTorch attention.
+            #
+            # PyTorch can dispatch this to optimized kernels
+            # such as Flash Attention when supported.
+            # --------------------------------------------------
+
+            out = F.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=None,
+                dropout_p=(
+                    self.dropout
+                    if self.training
+                    else 0.0
+                ),
+                is_causal=True,
+            )
+
+            attention = None
+
+        # ======================================================
         # Merge Heads
         #
-        # (B,H,T,D)
+        # (B, H, T, D)
+        #
         # ->
-        # (B,T,H,D)
+        #
+        # (B, T, H, D)
+        #
         # ->
-        # (B,T,C)
-        # ---------------------------------------------------
+        #
+        # (B, T, C)
+        # ======================================================
 
         out = (
             out.transpose(1, 2)
             .contiguous()
             .view(
                 batch_size,
-                seq_length,
-                embed_dim,
+                sequence_length,
+                self.embed_dim,
             )
         )
+
+        # ======================================================
+        # Output Projection
+        # ======================================================
 
         out = self.out_proj(out)
 
         out = self.resid_dropout(out)
 
+        # ======================================================
+        # Return
+        # ======================================================
+
         if return_attention:
+
             return out, attention
 
         return out
 
 
+# ==============================================================
+# Test
+# ==============================================================
+
 if __name__ == "__main__":
 
     torch.manual_seed(42)
 
-    from configs.model_config import GPTConfig
-
     config = GPTConfig(
+        vocab_size=10_000,
+        context_length=32,
         embed_dim=128,
         num_heads=8,
-        context_length=32,
+        num_layers=4,
     )
 
     model = MultiHeadSelfAttention(config)
 
-    x = torch.randn(4, 32, 128)
+    x = torch.randn(
+        4,
+        32,
+        128,
+    )
+
+    # ----------------------------------------------------------
+    # Normal forward
+    # ----------------------------------------------------------
+
+    output = model(x)
+
+    print("=" * 60)
+
+    print(
+        "Input Shape  :",
+        x.shape,
+    )
+
+    print(
+        "Output Shape :",
+        output.shape,
+    )
+
+    # ----------------------------------------------------------
+    # Attention inspection
+    # ----------------------------------------------------------
 
     output, attention = model(
         x,
         return_attention=True,
     )
 
-    print("=" * 60)
-    print("Input Shape      :", x.shape)
-    print("Output Shape     :", output.shape)
-    print("Attention Shape  :", attention.shape)
+    print(
+        "Attention Shape:",
+        attention.shape,
+    )
+
     print("=" * 60)

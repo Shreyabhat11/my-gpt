@@ -1,5 +1,0 @@
-Hello GPT!
-
-This is my first corpus.
-
-I am building my own Large Language Model.

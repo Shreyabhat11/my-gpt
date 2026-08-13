@@ -1,0 +1,29 @@
+The world is full of stories.
+Every story begins with a single idea.
+
+A language model learns patterns from text.
+It reads many sequences of tokens and learns to predict
+which token is likely to come next.
+
+A small model can learn simple patterns.
+A larger model can learn more complicated patterns.
+
+Machine learning systems learn from examples.
+Neural networks contain parameters that are updated during training.
+
+Transformers use attention to understand relationships between tokens.
+Causal attention prevents the model from looking at future tokens.
+
+A decoder-only language model predicts the next token.
+During training, the model sees a sequence and learns to predict
+the following token at every position.
+
+Python is a programming language.
+Deep learning uses tensors and numerical computation.
+PyTorch provides tools for building neural networks.
+
+Training a language model requires data, a tokenizer, a model,
+an optimizer, and a training loop.
+
+The goal of this project is to understand how these components
+work together to build a small language model from scratch.

@@ -1,36 +1,34 @@
 """
-Transformer Block
+Transformer Block.
 
-Implements a Pre-LayerNorm GPT-2 style Transformer block.
+Pre-LayerNorm decoder block used by the GPT model.
 
-Architecture
+Architecture:
 
-x
-│
-├───────────────┐
-│               │
-▼               │
-LayerNorm       │
-│               │
-▼               │
-MultiHeadAttention
-│               │
-▼               │
-Residual Add ◄──┘
-│
-├───────────────┐
-│               │
-▼               │
-LayerNorm       │
-│               │
-▼               │
-FeedForward
-│               │
-▼               │
-Residual Add ◄──┘
-│
-▼
-Output
+    x
+    │
+    ├───────────────┐
+    │               │
+    ▼               │
+ LayerNorm          │
+    │               │
+    ▼               │
+ Attention          │
+    │               │
+    └────── + ◄─────┘
+           │
+           ▼
+    LayerNorm
+           │
+           ▼
+      FeedForward
+           │
+           └────── + ◄───── residual
+           │
+           ▼
+        output
+
+Author: Shreya Bhat
 """
 
 from __future__ import annotations
@@ -38,46 +36,87 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from configs.model_config import GPTConfig
 from model.attention import MultiHeadSelfAttention
 from model.feedforward import FeedForward
 
-from configs.model_config import GPTConfig
 
 class TransformerBlock(nn.Module):
+    """
+    Single decoder Transformer block.
 
-    def __init__(self, config: GPTConfig):
+    Uses Pre-LayerNorm architecture.
+    """
+
+    def __init__(
+        self,
+        config: GPTConfig,
+    ) -> None:
+
         super().__init__()
+
+        # ======================================================
+        # First LayerNorm
+        # ======================================================
 
         self.ln1 = nn.LayerNorm(
             config.embed_dim,
             eps=config.layer_norm_eps,
         )
 
-        self.attn = MultiHeadSelfAttention(config)
+        # ======================================================
+        # Multi-Head Causal Self-Attention
+        # ======================================================
+
+        self.attn = MultiHeadSelfAttention(
+            config
+        )
+
+        # ======================================================
+        # Second LayerNorm
+        # ======================================================
 
         self.ln2 = nn.LayerNorm(
             config.embed_dim,
             eps=config.layer_norm_eps,
         )
 
-        self.ffn = FeedForward(config)
+        # ======================================================
+        # Feed Forward Network
+        # ======================================================
+
+        self.ffn = FeedForward(
+            config
+        )
+
+    # ==========================================================
+    # Forward
+    # ==========================================================
 
     def forward(
         self,
         x: torch.Tensor,
     ) -> torch.Tensor:
 
-        # --------------------------
-        # Attention Block
-        # --------------------------
+        # ------------------------------------------------------
+        # Attention sub-layer
+        #
+        # Pre-LN:
+        #
+        # x -> LayerNorm -> Attention -> Residual Add
+        # ------------------------------------------------------
 
         x = x + self.attn(
             self.ln1(x)
         )
 
-        # --------------------------
-        # Feed Forward Block
-        # --------------------------
+        # ------------------------------------------------------
+        # Feed Forward sub-layer
+        #
+        # Pre-LN:
+        #
+        # x -> LayerNorm -> FFN -> Residual Add
+        # ------------------------------------------------------
 
         x = x + self.ffn(
             self.ln2(x)
@@ -86,14 +125,25 @@ class TransformerBlock(nn.Module):
         return x
 
 
+# ==============================================================
+# Test
+# ==============================================================
+
 if __name__ == "__main__":
 
     torch.manual_seed(42)
 
-    model = TransformerBlock(
+    config = GPTConfig(
+        vocab_size=10_000,
+        context_length=32,
         embed_dim=128,
         num_heads=8,
-        context_length=32,
+        num_layers=4,
+        dropout=0.1,
+    )
+
+    model = TransformerBlock(
+        config
     )
 
     x = torch.randn(
@@ -102,12 +152,26 @@ if __name__ == "__main__":
         128,
     )
 
-    out = model(x)
+    output = model(x)
 
     print("=" * 60)
 
-    print("Input Shape :", x.shape)
+    print(
+        "Input Shape  :",
+        x.shape,
+    )
 
-    print("Output Shape:", out.shape)
+    print(
+        "Output Shape :",
+        output.shape,
+    )
+
+    print(
+        "Parameters   :",
+        sum(
+            p.numel()
+            for p in model.parameters()
+        ),
+    )
 
     print("=" * 60)
