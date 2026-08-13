@@ -15,63 +15,46 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from configs.model_config import GPTConfig
+
+from configs.model_config import GPTConfig
 
 class MultiHeadSelfAttention(nn.Module):
-    """
-    Multi-Head Causal Self Attention.
-
-    Input Shape:
-        (batch_size, seq_length, embed_dim)
-
-    Output Shape:
-        (batch_size, seq_length, embed_dim)
-    """
 
     def __init__(
         self,
-        embed_dim: int,
-        num_heads: int,
-        context_length: int,
-        dropout: float = 0.1,
-        bias: bool = False,
+        config: GPTConfig,
     ) -> None:
+
         super().__init__()
 
-        if embed_dim % num_heads != 0:
-            raise ValueError(
-                f"embed_dim ({embed_dim}) must be divisible by "
-                f"num_heads ({num_heads})"
-            )
+        self.embed_dim = config.embed_dim
+        self.num_heads = config.num_heads
+        self.head_dim = config.head_dim
 
-        self.embed_dim = embed_dim
-        self.num_heads = num_heads
-        self.head_dim = embed_dim // num_heads
-        self.scale = 1.0 / math.sqrt(self.head_dim)
+        self.scale = self.head_dim ** -0.5
 
-        # One projection for QKV
         self.qkv = nn.Linear(
-            embed_dim,
-            3 * embed_dim,
-            bias=bias,
+            config.embed_dim,
+            3 * config.embed_dim,
+            bias=config.bias,
         )
 
-        # Output projection
         self.out_proj = nn.Linear(
-            embed_dim,
-            embed_dim,
-            bias=bias,
+            config.embed_dim,
+            config.embed_dim,
+            bias=config.bias,
         )
 
-        self.attn_dropout = nn.Dropout(dropout)
-        self.resid_dropout = nn.Dropout(dropout)
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
 
-        # Lower-triangular causal mask
         self.register_buffer(
             "mask",
             torch.tril(
                 torch.ones(
-                    context_length,
-                    context_length,
+                    config.context_length,
+                    config.context_length,
                     dtype=torch.bool,
                 )
             ),
@@ -195,11 +178,15 @@ if __name__ == "__main__":
 
     torch.manual_seed(42)
 
-    model = MultiHeadSelfAttention(
+    from configs.model_config import GPTConfig
+
+    config = GPTConfig(
         embed_dim=128,
         num_heads=8,
         context_length=32,
     )
+
+    model = MultiHeadSelfAttention(config)
 
     x = torch.randn(4, 32, 128)
 

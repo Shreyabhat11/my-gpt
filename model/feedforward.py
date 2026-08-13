@@ -12,6 +12,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from configs.model_config import GPTConfig
 
 class FeedForward(nn.Module):
     """
@@ -27,21 +28,24 @@ class FeedForward(nn.Module):
         Dropout
     """
 
-    def __init__(
-        self,
-        embed_dim: int,
-        dropout: float = 0.1,
-        bias: bool = False,
-    ) -> None:
+    def __init__(self, config: GPTConfig):
         super().__init__()
 
-        hidden_dim = 4 * embed_dim
+        hidden_dim = config.embed_dim * config.expansion_factor
 
         self.net = nn.Sequential(
-            nn.Linear(embed_dim, hidden_dim, bias=bias),
+            nn.Linear(
+                config.embed_dim,
+                hidden_dim,
+                bias=config.bias,
+            ),
             nn.GELU(),
-            nn.Linear(hidden_dim, embed_dim, bias=bias),
-            nn.Dropout(dropout),
+            nn.Linear(
+                hidden_dim,
+                config.embed_dim,
+                bias=config.bias,
+            ),
+            nn.Dropout(config.dropout),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -61,10 +65,11 @@ if __name__ == "__main__":
 
     torch.manual_seed(42)
 
-    model = FeedForward(
+    config = GPTConfig(
         embed_dim=128,
-        dropout=0.1,
     )
+
+    model = FeedForward(config)
 
     x = torch.randn(4, 32, 128)
 
