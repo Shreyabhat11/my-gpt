@@ -119,16 +119,13 @@ def main():
 
     output_ids = generate(
         model=model,
-
         input_ids=input_ids,
-
         max_new_tokens=100,
-
         context_length=config.context_length,
-
         temperature=0.8,
-
         top_k=40,
+        top_p=0.9,
+        repetition_penalty=1.1,
     )
 
     # ==========================================================

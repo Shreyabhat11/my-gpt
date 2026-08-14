@@ -55,10 +55,13 @@ class Trainer:
         self.val_loader = val_loader
         self.config = config
         self.device = device
-        self.global_step = 0 
+        self.global_step = 0
         self.checkpoint_manager = CheckpointManager(
             "artifacts/checkpoints"
         )
+        self.optimizer = None
+        self.scheduler = None
+        self.best_val_loss = float("inf")
         # ======================================================
         # Move model to device
         # ======================================================
@@ -91,11 +94,6 @@ class Trainer:
             min_learning_rate=config.min_learning_rate,
         )
 
-        # ======================================================
-        # Training State
-        # ======================================================
-
-        self.global_step = 0
 
     # ==========================================================
     # Train Step
@@ -286,20 +284,11 @@ class Trainer:
 
             self.global_step += 1
 
-            if (
-                self.global_step
-                % self.config.checkpoint_interval
-                == 0
-            ):
-                self.save_checkpoint()
-
             # --------------------------------------------------
             # Current learning rate
             # --------------------------------------------------
 
-            learning_rate = (
-                self.scheduler.get_lr()
-            )
+            learning_rate = self.scheduler.get_lr()
 
             # --------------------------------------------------
             # Validation
@@ -314,6 +303,37 @@ class Trainer:
             ):
 
                 val_loss = self.evaluate()
+
+                # --------------------------------------------------
+                # Best checkpoint
+                # --------------------------------------------------
+
+                if val_loss < self.best_val_loss:
+
+                    self.best_val_loss = val_loss
+
+                    self.save_checkpoint(
+                        filename="best.pt"
+                    )
+
+                    print(
+                        f"New best checkpoint saved | "
+                        f"Val Loss {val_loss:.4f}"
+                    )
+
+            # --------------------------------------------------
+            # Latest checkpoint
+            # --------------------------------------------------
+
+            if (
+                self.global_step
+                % self.config.checkpoint_interval
+                == 0
+            ):
+
+                self.save_checkpoint(
+                    filename="latest.pt"
+                )
 
             # --------------------------------------------------
             # Store metrics
@@ -365,6 +385,7 @@ class Trainer:
             step=self.global_step,
             config=self.config,
             filename=filename,
+            best_val_loss=self.best_val_loss,
         )
 
         print(
@@ -376,24 +397,33 @@ class Trainer:
         path: str,
     ) -> None:
 
-        self.global_step = (
-            self.checkpoint_manager.load(
-                path=path,
-                model=self.model,
-                optimizer=self.optimizer,
-                scheduler=self.scheduler,
-                device=self.device,
-            )
+        checkpoint = self.checkpoint_manager.load(
+            path=path,
+            model=self.model,
+            optimizer=self.optimizer,
+            scheduler=self.scheduler,
+            device=self.device,
+        )
+
+        self.global_step = checkpoint["step"]
+
+        self.best_val_loss = checkpoint.get(
+            "best_val_loss",
+            float("inf"),
         )
 
         print(
-            f"Checkpoint loaded: "
-            f"{path}"
+            f"Checkpoint loaded: {path}"
         )
 
         print(
             f"Resuming from step: "
             f"{self.global_step}"
+        )
+
+        print(
+            f"Best validation loss: "
+            f"{self.best_val_loss}"
         )
 
 

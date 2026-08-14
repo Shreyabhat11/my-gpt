@@ -6,6 +6,7 @@ Stores:
     - Optimizer state
     - Scheduler state
     - Training step
+    - Best validation loss
     - Configuration
 
 Author: Shreya Bhat
@@ -50,9 +51,32 @@ class CheckpointManager:
         step: int,
         config: Any,
         filename: str = "latest.pt",
+        best_val_loss: float | None = None,
     ) -> Path:
         """
         Save complete training state.
+
+        Args:
+            model:
+                GPT model.
+
+            optimizer:
+                Optimizer state.
+
+            scheduler:
+                Learning-rate scheduler.
+
+            step:
+                Current training step.
+
+            config:
+                GPT configuration.
+
+            filename:
+                Checkpoint filename.
+
+            best_val_loss:
+                Best validation loss observed so far.
         """
 
         checkpoint = {
@@ -65,10 +89,17 @@ class CheckpointManager:
                 optimizer.state_dict(),
 
             "scheduler_state_dict":
-                scheduler.state_dict(),
+                (
+                    scheduler.state_dict()
+                    if scheduler is not None
+                    else None
+                ),
 
             "config":
                 config.__dict__,
+
+            "best_val_loss":
+                best_val_loss,
         }
 
         path = (
@@ -77,7 +108,7 @@ class CheckpointManager:
         )
 
         # ------------------------------------------------------
-        # Save atomically
+        # Atomic save
         # ------------------------------------------------------
 
         temporary_path = (
@@ -107,12 +138,12 @@ class CheckpointManager:
         optimizer: torch.optim.Optimizer | None = None,
         scheduler: Any | None = None,
         device: torch.device | str = "cpu",
-    ) -> int:
+    ) -> dict:
         """
         Load checkpoint.
 
         Returns:
-            Training step stored in checkpoint.
+            Complete checkpoint metadata.
         """
 
         path = Path(path)
@@ -126,6 +157,7 @@ class CheckpointManager:
         checkpoint = torch.load(
             path,
             map_location=device,
+            weights_only=False,
         )
 
         # ------------------------------------------------------
@@ -142,7 +174,12 @@ class CheckpointManager:
         # Optimizer
         # ------------------------------------------------------
 
-        if optimizer is not None:
+        if (
+            optimizer is not None
+            and checkpoint.get(
+                "optimizer_state_dict"
+            ) is not None
+        ):
 
             optimizer.load_state_dict(
                 checkpoint[
@@ -154,7 +191,12 @@ class CheckpointManager:
         # Scheduler
         # ------------------------------------------------------
 
-        if scheduler is not None:
+        if (
+            scheduler is not None
+            and checkpoint.get(
+                "scheduler_state_dict"
+            ) is not None
+        ):
 
             scheduler.load_state_dict(
                 checkpoint[
@@ -162,7 +204,55 @@ class CheckpointManager:
                 ]
             )
 
-        return checkpoint["step"]
+        return checkpoint
+
+    # ==========================================================
+    # Save Latest
+    # ==========================================================
+
+    def save_latest(
+        self,
+        model: torch.nn.Module,
+        optimizer: torch.optim.Optimizer,
+        scheduler: Any,
+        step: int,
+        config: Any,
+        best_val_loss: float | None = None,
+    ) -> Path:
+
+        return self.save(
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            step=step,
+            config=config,
+            filename="latest.pt",
+            best_val_loss=best_val_loss,
+        )
+
+    # ==========================================================
+    # Save Best
+    # ==========================================================
+
+    def save_best(
+        self,
+        model: torch.nn.Module,
+        optimizer: torch.optim.Optimizer,
+        scheduler: Any,
+        step: int,
+        config: Any,
+        best_val_loss: float,
+    ) -> Path:
+
+        return self.save(
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            step=step,
+            config=config,
+            filename="best.pt",
+            best_val_loss=best_val_loss,
+        )
 
 
 # ==============================================================
@@ -172,7 +262,6 @@ class CheckpointManager:
 if __name__ == "__main__":
 
     from configs.model_config import GPTConfig
-    from training.optimizer import create_optimizer
     from training.scheduler import (
         CosineWarmupScheduler,
     )
@@ -180,7 +269,7 @@ if __name__ == "__main__":
     torch.manual_seed(42)
 
     # ----------------------------------------------------------
-    # Model
+    # Configuration
     # ----------------------------------------------------------
 
     config = GPTConfig(
@@ -191,6 +280,10 @@ if __name__ == "__main__":
         num_layers=4,
         dropout=0.1,
     )
+
+    # ----------------------------------------------------------
+    # Model
+    # ----------------------------------------------------------
 
     model = torch.nn.Linear(
         128,
@@ -219,7 +312,7 @@ if __name__ == "__main__":
     )
 
     # ----------------------------------------------------------
-    # Checkpoint manager
+    # Manager
     # ----------------------------------------------------------
 
     manager = CheckpointManager(
@@ -230,21 +323,35 @@ if __name__ == "__main__":
     # Save
     # ----------------------------------------------------------
 
-    path = manager.save(
+    latest_path = manager.save_latest(
         model=model,
         optimizer=optimizer,
         scheduler=scheduler,
         step=42,
         config=config,
+        best_val_loss=2.5,
+    )
+
+    best_path = manager.save_best(
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        step=42,
+        config=config,
+        best_val_loss=2.5,
     )
 
     print("=" * 60)
 
     print(
-        "Checkpoint saved:"
+        "Latest checkpoint:",
+        latest_path,
     )
 
-    print(path)
+    print(
+        "Best checkpoint:",
+        best_path,
+    )
 
     # ----------------------------------------------------------
     # New model
@@ -272,8 +379,8 @@ if __name__ == "__main__":
     # Load
     # ----------------------------------------------------------
 
-    step = manager.load(
-        path=path,
+    checkpoint = manager.load(
+        path=latest_path,
         model=new_model,
         optimizer=new_optimizer,
         scheduler=new_scheduler,
@@ -281,7 +388,12 @@ if __name__ == "__main__":
 
     print(
         "Loaded step:",
-        step,
+        checkpoint["step"],
+    )
+
+    print(
+        "Best validation loss:",
+        checkpoint["best_val_loss"],
     )
 
     print("=" * 60)

@@ -40,6 +40,7 @@ from model.gpt import GPT
 from training.trainer import Trainer
 
 
+
 # ==============================================================
 # Paths
 # ==============================================================
@@ -134,7 +135,7 @@ def main() -> None:
         validation_steps=20,
 
         # Checkpoint
-        checkpoint_interval=500,
+        checkpoint_interval=50,
 
         # DataLoader
         num_workers=0,
