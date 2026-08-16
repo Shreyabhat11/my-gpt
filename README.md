@@ -1,12 +1,4 @@
-Perfect. This structure is enough to make the README accurate without guessing. I can see you have a fairly complete architecture: custom BPE tokenizer, GPT model components, training/checkpointing, evaluation, inference, and tests.
-
-One cleanup note before we write it: you have some older/root-level files such as `train.py`, `inference.py`, `checkpoints/`, and `data/tokenizer.py`, while the current pipeline uses `training/train.py` and `inference/generate.py`. I would **not delete them yet**; we can mention the active pipeline clearly in the README and clean the repository afterward if needed.
-
-## README.md
-
-Replace your current `README.md` with this:
-
-````markdown
+```markdown
 # My-GPT
 
 A production-oriented implementation of a small GPT-style language model built from scratch in PyTorch.
