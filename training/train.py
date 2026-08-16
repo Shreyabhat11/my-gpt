@@ -320,15 +320,25 @@ def main() -> None:
 
     trainer = Trainer(
         model=model,
-
         train_loader=loaders.train_loader,
-
         val_loader=loaders.val_loader,
-
         config=training_config,
-
         device=device,
     )
+    checkpoint_path = Path(
+        "artifacts/checkpoints/latest.pt"
+    )
+
+    if checkpoint_path.exists():
+
+        print("=" * 60)
+        print("Checkpoint found.")
+        print("Resuming training...")
+        print("=" * 60)
+
+        trainer.load_checkpoint(
+            checkpoint_path
+        )
 
     # ==========================================================
     # Training Information
@@ -373,28 +383,28 @@ def main() -> None:
     # Final Results
     # ==========================================================
 
-    print()
     print("=" * 60)
+    print("Training completed.")
 
     print(
-        "Training completed."
+        f"Total steps: {trainer.global_step}"
     )
 
-    print(
-        "Total steps:",
-        trainer.global_step,
-    )
-
-    print(
-        "Final train loss:",
-        history[-1].train_loss,
-    )
-
-    if history[-1].val_loss is not None:
+    if history:
 
         print(
-            "Final validation loss:",
-            history[-1].val_loss,
+            f"Final train loss: "
+            f"{history[-1].train_loss}"
+        )
+
+    else:
+
+        print(
+            "No new training steps were executed."
+        )
+
+        print(
+            "Using metrics from the existing checkpoint/evaluation."
         )
 
     print("=" * 60)

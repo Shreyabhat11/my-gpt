@@ -1,55 +1,120 @@
 """
-GPT Evaluation Script.
+GPT Model Evaluation
 
-Evaluates a trained GPT checkpoint using
-validation loss and perplexity.
+Evaluates a trained GPT model on the validation dataset.
+
+Metrics:
+    - Validation Loss
+    - Perplexity
 
 Author: Shreya Bhat
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+import math
 
 import torch
+import torch.nn.functional as F
 
 from configs.model_config import GPTConfig
 from configs.training_config import TrainingConfig
 
-from tokenizer.bpe import BPETokenizer
+from data.build_data import (
+    CORPUS_PATH,
+    TOKENIZER_PATH,
+)
 
 from data.dataloader import create_dataloaders
 
+from tokenizer.bpe import BPETokenizer
+
 from model.gpt import GPT
 
-from evaluation.perplexity import (
-    evaluate_loss,
-    calculate_perplexity,
-)
+from training.checkpoint import CheckpointManager
 
+import json
+from pathlib import Path
 
 # ==============================================================
-# Paths
+# Evaluation
 # ==============================================================
 
-CORPUS_PATH = Path(
-    "data/corpus.txt"
-)
 
-TOKENIZER_PATH = Path(
-    "artifacts/tokenizer.json"
-)
+@torch.no_grad()
+def evaluate(
+    model: torch.nn.Module,
+    data_loader,
+    device: torch.device,
+) -> float:
+    """
+    Evaluate model on a dataset.
 
-CHECKPOINT_PATH = Path(
-    "artifacts/checkpoints/latest.pt"
-)
+    Returns:
+        Average cross-entropy loss.
+    """
+
+    model.eval()
+
+    total_loss = 0.0
+    total_batches = 0
+
+    for input_ids, target_ids in data_loader:
+
+        input_ids = input_ids.to(
+            device
+        )
+
+        target_ids = target_ids.to(
+            device
+        )
+
+        output = model(
+            input_ids,
+            targets=target_ids,
+        )
+
+        # ------------------------------------------------------
+        # GPT returns:
+        #
+        # logits, loss
+        # ------------------------------------------------------
+
+        if isinstance(output, tuple):
+
+            _, loss = output
+
+        else:
+
+            logits = output
+
+            loss = F.cross_entropy(
+                logits.reshape(
+                    -1,
+                    logits.size(-1),
+                ),
+                target_ids.reshape(-1),
+            )
+
+        total_loss += loss.item()
+
+        total_batches += 1
+
+    if total_batches == 0:
+
+        raise RuntimeError(
+            "Validation DataLoader is empty."
+        )
+
+    return total_loss / total_batches
 
 
 # ==============================================================
 # Main
 # ==============================================================
 
-def main() -> None:
+
+def main():
 
     # ==========================================================
     # Device
@@ -61,36 +126,10 @@ def main() -> None:
         else "cpu"
     )
 
-    print("=" * 60)
-    print("GPT Evaluation")
-    print("=" * 60)
-
     print(
         "Device:",
         device,
     )
-
-    # ==========================================================
-    # Validate Files
-    # ==========================================================
-
-    if not CORPUS_PATH.exists():
-
-        raise FileNotFoundError(
-            f"Corpus not found: {CORPUS_PATH}"
-        )
-
-    if not TOKENIZER_PATH.exists():
-
-        raise FileNotFoundError(
-            f"Tokenizer not found: {TOKENIZER_PATH}"
-        )
-
-    if not CHECKPOINT_PATH.exists():
-
-        raise FileNotFoundError(
-            f"Checkpoint not found: {CHECKPOINT_PATH}"
-        )
 
     # ==========================================================
     # Model Configuration
@@ -103,18 +142,17 @@ def main() -> None:
         num_heads=8,
         num_layers=4,
         dropout=0.1,
-        bias=False,
     )
 
     # ==========================================================
-    # Evaluation Data Configuration
+    # Training Configuration
     # ==========================================================
 
     training_config = TrainingConfig(
         batch_size=4,
         num_workers=0,
         pin_memory=False,
-        drop_last=False,
+        drop_last=True,
     )
 
     # ==========================================================
@@ -129,11 +167,6 @@ def main() -> None:
 
         text = file.read()
 
-    print(
-        "Corpus characters:",
-        len(text),
-    )
-
     # ==========================================================
     # Load Tokenizer
     # ==========================================================
@@ -144,27 +177,6 @@ def main() -> None:
         TOKENIZER_PATH
     )
 
-    print(
-        "Tokenizer vocabulary:",
-        tokenizer.vocab_size,
-    )
-
-    # ==========================================================
-    # Vocabulary Check
-    # ==========================================================
-
-    if (
-        tokenizer.vocab_size
-        != model_config.vocab_size
-    ):
-
-        raise ValueError(
-            "Tokenizer vocabulary and model vocabulary "
-            "do not match.\n"
-            f"Tokenizer: {tokenizer.vocab_size}\n"
-            f"Model: {model_config.vocab_size}"
-        )
-
     # ==========================================================
     # Encode Corpus
     # ==========================================================
@@ -173,13 +185,8 @@ def main() -> None:
         text
     )
 
-    print(
-        "Total tokens:",
-        len(token_ids),
-    )
-
     # ==========================================================
-    # Build DataLoaders
+    # Create DataLoaders
     # ==========================================================
 
     loaders = create_dataloaders(
@@ -197,71 +204,118 @@ def main() -> None:
         model_config
     )
 
-    # ==========================================================
-    # Load Checkpoint
-    # ==========================================================
-
-    checkpoint = torch.load(
-        CHECKPOINT_PATH,
-        map_location=device,
-    )
-
-    # ----------------------------------------------------------
-    # Support checkpoint containing model_state_dict
-    # ----------------------------------------------------------
-
-    if "model_state_dict" in checkpoint:
-
-        model.load_state_dict(
-            checkpoint[
-                "model_state_dict"
-            ]
-        )
-
-    else:
-
-        # Support raw state_dict checkpoints
-        model.load_state_dict(
-            checkpoint
-        )
-
     model.to(device)
 
-    model.eval()
+    num_parameters = sum(
+        parameter.numel()
+        for parameter in model.parameters()
+    )
+
+    print(
+        f"Initialized GPT with "
+        f"{num_parameters:,} parameters."
+    )
+
+    # ==========================================================
+    # Load Best Checkpoint
+    # ==========================================================
+
+    checkpoint_manager = CheckpointManager(
+        "artifacts/checkpoints"
+    )
+
+    checkpoint_path = (
+        "artifacts/checkpoints/best.pt"
+    )
+
+    checkpoint_manager.load(
+        path=checkpoint_path,
+        model=model,
+        device=device,
+    )
+
+    print(
+        "Loaded checkpoint:",
+        checkpoint_path,
+    )
 
     # ==========================================================
     # Evaluate
     # ==========================================================
 
-    validation_loss = evaluate_loss(
+    validation_loss = evaluate(
         model=model,
         data_loader=loaders.val_loader,
         device=device,
     )
 
-    perplexity = calculate_perplexity(
+    # ==========================================================
+    # Perplexity
+    # ==========================================================
+
+    perplexity = math.exp(
         validation_loss
     )
 
     # ==========================================================
-    # Report
+    # Save Evaluation Report
+    # ==========================================================
+
+    evaluation_dir = Path(
+        "artifacts/evaluation"
+    )
+
+    evaluation_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    report = {
+        "checkpoint": checkpoint_path,
+        "parameters": num_parameters,
+        "validation_loss": validation_loss,
+        "perplexity": perplexity,
+        "device": str(device),
+    }
+
+    report_path = (
+        evaluation_dir
+        / "evaluation.json"
+    )
+
+    with open(
+        report_path,
+        "w",
+        encoding="utf-8",
+    ) as file:
+
+        json.dump(
+            report,
+            file,
+            indent=4,
+        )
+
+    print(
+        "Evaluation report saved:",
+        report_path,
+    )
+    # ==========================================================
+    # Results
     # ==========================================================
 
     print()
     print("=" * 60)
-
-    print(
-        "Evaluation Results"
-    )
-
+    print("Evaluation")
     print("=" * 60)
 
     print(
-        f"Validation Loss : {validation_loss:.4f}"
+        f"Validation Loss : "
+        f"{validation_loss:.4f}"
     )
 
     print(
-        f"Perplexity      : {perplexity:.4f}"
+        f"Perplexity      : "
+        f"{perplexity:.4f}"
     )
 
     print("=" * 60)

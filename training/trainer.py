@@ -27,6 +27,8 @@ from training.optimizer import create_optimizer
 from training.scheduler import CosineWarmupScheduler
 from training.checkpoint import CheckpointManager
 
+import json
+from pathlib import Path
 @dataclass
 class TrainingMetrics:
     """
@@ -94,6 +96,14 @@ class Trainer:
             min_learning_rate=config.min_learning_rate,
         )
 
+        self.history = {
+            "steps": [],
+            "train_loss": [],
+            "val_steps": [],
+            "val_loss": [],
+            "learning_rates": [],
+        }
+
 
     # ==========================================================
     # Train Step
@@ -136,6 +146,18 @@ class Trainer:
         _, loss = self.model(
             input_ids,
             target_ids,
+        )
+
+        self.history["steps"].append(
+            self.global_step
+        )
+
+        self.history["train_loss"].append(
+            loss.item()
+        )
+
+        self.history["learning_rates"].append(
+            self.optimizer.param_groups[0]["lr"]
         )
 
         # ------------------------------------------------------
@@ -304,6 +326,14 @@ class Trainer:
 
                 val_loss = self.evaluate()
 
+                self.history["val_steps"].append(
+                    self.global_step
+                )
+
+                self.history["val_loss"].append(
+                    val_loss
+                )
+
                 # --------------------------------------------------
                 # Best checkpoint
                 # --------------------------------------------------
@@ -370,6 +400,35 @@ class Trainer:
                     f"Train Loss {train_loss:.4f} | "
                     f"LR {learning_rate:.6e}"
                 )
+        # ==========================================================
+        # Save Training History
+        # ==========================================================
+
+        history_path = Path(
+            "artifacts/training_history.json"
+        )
+
+        history_path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        with open(
+            history_path,
+            "w",
+            encoding="utf-8",
+        ) as file:
+
+            json.dump(
+                self.history,
+                file,
+                indent=4,
+            )
+
+        print(
+            "Training history saved:",
+            history_path,
+        )
 
         return history
 
@@ -536,19 +595,27 @@ if __name__ == "__main__":
     # ==========================================================
 
     print("=" * 60)
+    print("Training completed.")
 
     print(
-        "Training completed."
+        f"Total steps: {trainer.global_step}"
     )
 
-    print(
-        "Total steps:",
-        trainer.global_step,
-    )
+    if history:
 
-    print(
-        "Final train loss:",
-        history[-1].train_loss,
-    )
+        print(
+            f"Final train loss: "
+            f"{history[-1].train_loss}"
+        )
+
+    else:
+
+        print(
+            "No new training steps were executed."
+        )
+
+        print(
+            "Using metrics from the existing checkpoint/evaluation."
+        )
 
     print("=" * 60)

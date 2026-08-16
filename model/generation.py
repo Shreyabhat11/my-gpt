@@ -195,231 +195,252 @@ def apply_top_p(
 
 
 @torch.no_grad()
+@torch.no_grad()
 def generate(
-    model: torch.nn.Module,
+    model,
     input_ids: torch.Tensor,
-    max_new_tokens: int,
-    context_length: int,
+    max_new_tokens: int = 100,
+    context_length: int | None = None,
     temperature: float = 1.0,
-    top_k: int | None = None,
-    top_p: float = 1.0,
+    top_k: int | None = 40,
+    top_p: float | None = 0.9,
     repetition_penalty: float = 1.0,
 ) -> torch.Tensor:
     """
-    Autoregressively generate tokens.
+    Autoregressive text generation.
 
-    Args:
-        model:
-            GPT model.
-
-        input_ids:
-            Shape (B, T).
-
-        max_new_tokens:
-            Number of tokens to generate.
-
-        context_length:
-            Maximum model context length.
-
-        temperature:
-            Controls randomness.
-
-            temperature < 1:
-                More deterministic.
-
-            temperature > 1:
-                More random.
-
-        top_k:
-            Restrict sampling to top-k tokens.
-
-        top_p:
-            Nucleus sampling threshold.
-
-        repetition_penalty:
-            Penalize previously generated tokens.
-
-    Returns:
-        Generated token IDs.
+    Supports:
+        - temperature sampling
+        - top-k sampling
+        - top-p / nucleus sampling
+        - repetition penalty
+        - context window limiting
     """
 
-    # ==========================================================
-    # Validation
-    # ==========================================================
+    model.eval()
 
-    if temperature <= 0:
-
-        raise ValueError(
-            "temperature must be greater than 0."
-        )
+    # ==========================================================
+    # Validate parameters
+    # ==========================================================
 
     if max_new_tokens < 0:
-
         raise ValueError(
             "max_new_tokens must be >= 0."
         )
 
-    if not 0.0 < top_p <= 1.0:
-
+    if temperature <= 0:
         raise ValueError(
-            "top_p must be in the range (0, 1]."
+            "temperature must be greater than 0."
+        )
+
+    if top_k is not None and top_k <= 0:
+        raise ValueError(
+            "top_k must be greater than 0."
+        )
+
+    if top_p is not None and not (
+        0 < top_p <= 1
+    ):
+        raise ValueError(
+            "top_p must be between 0 and 1."
+        )
+
+    if repetition_penalty <= 0:
+        raise ValueError(
+            "repetition_penalty must be greater than 0."
         )
 
     # ==========================================================
-    # Preserve Original Training State
+    # Context length
     # ==========================================================
 
-    was_training = model.training
+    if context_length is None:
 
-    model.eval()
+        context_length = model.config.context_length
 
-    try:
+    # ==========================================================
+    # Generation loop
+    # ==========================================================
+
+    for _ in range(max_new_tokens):
+
+        # ------------------------------------------------------
+        # Keep only the most recent context
+        # ------------------------------------------------------
+
+        input_context = input_ids[
+            :, -context_length:
+        ]
+
+        # ------------------------------------------------------
+        # Forward pass
+        # ------------------------------------------------------
+
+        output = model(
+            input_context
+        )
+
+        # ------------------------------------------------------
+        # Handle GPT output
+        #
+        # Model may return:
+        #
+        #     logits
+        #
+        # or:
+        #
+        #     logits, loss
+        # ------------------------------------------------------
+
+        if isinstance(output, tuple):
+
+            logits = output[0]
+
+        else:
+
+            logits = output
+
+        # ------------------------------------------------------
+        # Select logits for the final token
+        #
+        # (B, T, V)
+        #       ↓
+        # (B, V)
+        # ------------------------------------------------------
+
+        logits = logits[:, -1, :]
 
         # ======================================================
-        # Generation Loop
+        # Repetition Penalty
         # ======================================================
 
-        for _ in range(max_new_tokens):
+        if repetition_penalty != 1.0:
 
-            # --------------------------------------------------
-            # Context Window
-            # --------------------------------------------------
-
-            idx_cond = input_ids[
-                :, -context_length:
-            ]
-
-            # --------------------------------------------------
-            # Forward Pass
-            # --------------------------------------------------
-
-            output = model(
-                idx_cond
-            )
-
-            # GPT may return:
-            #
-            # logits
-            #
-            # or:
-            #
-            # logits, loss
-
-            if isinstance(
-                output,
-                tuple,
+            for token_id in set(
+                input_ids[0].tolist()
             ):
 
-                logits = output[0]
+                if logits[0, token_id] < 0:
 
-            else:
+                    logits[0, token_id] *= (
+                        repetition_penalty
+                    )
 
-                logits = output
+                else:
 
-            # --------------------------------------------------
-            # Validate Model Output
-            # --------------------------------------------------
+                    logits[0, token_id] /= (
+                        repetition_penalty
+                    )
 
-            if logits.ndim != 3:
+        # ======================================================
+        # Temperature
+        # ======================================================
 
-                raise RuntimeError(
-                    "GPT must return logits with "
-                    "shape (B, T, vocab_size). "
-                    f"Received: {logits.shape}"
-                )
+        logits = logits / temperature
 
-            # --------------------------------------------------
-            # Last Token
-            # --------------------------------------------------
+        # ======================================================
+        # Top-K Filtering
+        # ======================================================
 
-            logits = logits[:, -1, :]
+        if top_k is not None:
 
-            # --------------------------------------------------
-            # Repetition Penalty
-            # --------------------------------------------------
-
-            logits = apply_repetition_penalty(
-                logits=logits,
-                input_ids=input_ids,
-                penalty=repetition_penalty,
+            k = min(
+                top_k,
+                logits.size(-1),
             )
 
-            # --------------------------------------------------
-            # Temperature
-            # --------------------------------------------------
-
-            logits = logits / temperature
-
-            # --------------------------------------------------
-            # Top-k
-            # --------------------------------------------------
-
-            if top_k is not None:
-
-                logits = apply_top_k(
-                    logits,
-                    top_k,
-                )
-
-            # --------------------------------------------------
-            # Top-p
-            # --------------------------------------------------
-
-            if top_p < 1.0:
-
-                logits = apply_top_p(
-                    logits,
-                    top_p,
-                )
-
-            # --------------------------------------------------
-            # Probabilities
-            # --------------------------------------------------
-
-            probabilities = torch.softmax(
+            values, _ = torch.topk(
                 logits,
+                k,
                 dim=-1,
             )
 
-            # --------------------------------------------------
-            # Numerical Safety
-            # --------------------------------------------------
+            minimum_value = values[
+                :, -1
+            ].unsqueeze(-1)
 
-            if not torch.isfinite(
-                probabilities
-            ).all():
-
-                raise RuntimeError(
-                    "Generation produced invalid "
-                    "probabilities."
-                )
-
-            # --------------------------------------------------
-            # Sample Next Token
-            # --------------------------------------------------
-
-            next_token = torch.multinomial(
-                probabilities,
-                num_samples=1,
-            )
-
-            # --------------------------------------------------
-            # Append
-            # --------------------------------------------------
-
-            input_ids = torch.cat(
-                (
-                    input_ids,
-                    next_token,
+            logits = torch.where(
+                logits < minimum_value,
+                torch.full_like(
+                    logits,
+                    float("-inf"),
                 ),
-                dim=1,
+                logits,
             )
 
-    finally:
+        # ======================================================
+        # Top-P / Nucleus Sampling
+        # ======================================================
 
-        # Restore original model state.
-        if was_training:
+        if top_p is not None:
 
-            model.train()
+            sorted_logits, sorted_indices = torch.sort(
+                logits,
+                descending=True,
+                dim=-1,
+            )
+
+            sorted_probabilities = torch.softmax(
+                sorted_logits,
+                dim=-1,
+            )
+
+            cumulative_probabilities = torch.cumsum(
+                sorted_probabilities,
+                dim=-1,
+            )
+
+            remove_mask = (
+                cumulative_probabilities > top_p
+            )
+
+            # Always keep the most probable token
+            remove_mask[:, 0] = False
+
+            sorted_logits = sorted_logits.masked_fill(
+                remove_mask,
+                float("-inf"),
+            )
+
+            logits = torch.full_like(
+                logits,
+                float("-inf"),
+            )
+
+            logits.scatter_(
+                dim=-1,
+                index=sorted_indices,
+                src=sorted_logits,
+            )
+
+        # ======================================================
+        # Convert logits to probabilities
+        # ======================================================
+
+        probabilities = torch.softmax(
+            logits,
+            dim=-1,
+        )
+
+        # ======================================================
+        # Sample next token
+        # ======================================================
+
+        next_token = torch.multinomial(
+            probabilities,
+            num_samples=1,
+        )
+
+        # ======================================================
+        # Append token
+        # ======================================================
+
+        input_ids = torch.cat(
+            [
+                input_ids,
+                next_token,
+            ],
+            dim=1,
+        )
 
     return input_ids

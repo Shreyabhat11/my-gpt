@@ -1,34 +1,85 @@
 """
-GPT Text Generation Demo.
+GPT Text Generation CLI.
 
 Author: Shreya Bhat
 """
 
 from __future__ import annotations
 
+import argparse
+
 import torch
 
 from configs.model_config import GPTConfig
-
 from tokenizer.bpe import BPETokenizer
-
 from model.gpt import GPT
-
 from model.generation import generate
 
 
-CORPUS_PATH = "data/corpus.txt"
-
-TOKENIZER_PATH = (
-    "artifacts/tokenizer.json"
-)
+TOKENIZER_PATH = "artifacts/tokenizer.json"
 
 CHECKPOINT_PATH = (
     "artifacts/checkpoints/latest.pt"
 )
 
 
+def parse_args():
+    """
+    Parse command-line generation arguments.
+    """
+
+    parser = argparse.ArgumentParser(
+        description="Generate text using the trained GPT model."
+    )
+
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        default="The world",
+        help="Text prompt used for generation.",
+    )
+
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=100,
+        help="Maximum number of tokens to generate.",
+    )
+
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.8,
+        help="Sampling temperature.",
+    )
+
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=40,
+        help="Top-k sampling value.",
+    )
+
+    parser.add_argument(
+        "--top-p",
+        type=float,
+        default=0.9,
+        help="Top-p nucleus sampling value.",
+    )
+
+    parser.add_argument(
+        "--repetition-penalty",
+        type=float,
+        default=1.1,
+        help="Penalty applied to previously generated tokens.",
+    )
+
+    return parser.parse_args()
+
+
 def main():
+
+    args = parse_args()
 
     # ==========================================================
     # Device
@@ -38,6 +89,10 @@ def main():
         "cuda"
         if torch.cuda.is_available()
         else "cpu"
+    )
+
+    print(
+        f"Device: {device}"
     )
 
     # ==========================================================
@@ -95,9 +150,7 @@ def main():
     # Prompt
     # ==========================================================
 
-    prompt = (
-        "The world"
-    )
+    prompt = args.prompt
 
     # ==========================================================
     # Encode
@@ -120,12 +173,11 @@ def main():
     output_ids = generate(
         model=model,
         input_ids=input_ids,
-        max_new_tokens=100,
-        context_length=config.context_length,
-        temperature=0.8,
-        top_k=40,
-        top_p=0.9,
-        repetition_penalty=1.1,
+        max_new_tokens=args.max_new_tokens,
+        temperature=args.temperature,
+        top_k=args.top_k,
+        top_p=args.top_p,
+        repetition_penalty=args.repetition_penalty,
     )
 
     # ==========================================================

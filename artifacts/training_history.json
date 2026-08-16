@@ -1,0 +1,7 @@
+{
+    "steps": [],
+    "train_loss": [],
+    "val_steps": [],
+    "val_loss": [],
+    "learning_rates": []
+}

@@ -1,0 +1,7 @@
+{
+    "checkpoint": "artifacts/checkpoints/best.pt",
+    "parameters": 825600,
+    "validation_loss": 2.5746377894752905,
+    "perplexity": 13.126561718499111,
+    "device": "cpu"
+}
