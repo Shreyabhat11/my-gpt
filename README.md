@@ -674,22 +674,3 @@ python -m tests.test_pipeline
 Built as a hands-on implementation of a complete GPT-style language-model training and inference pipeline using PyTorch.
 
 ````
-
-### One thing I'd do after updating the README
-
-Before pushing to GitHub, clean out generated Python cache files:
-
-```powershell
-Get-ChildItem -Path . -Recurse -Directory -Filter "__pycache__" |
-Remove-Item -Recurse -Force
-````
-
-And make sure `.gitignore` contains at least:
-
-```gitignore
-__pycache__/
-*.pyc
-.venv/
-venv/
-.env
-```
