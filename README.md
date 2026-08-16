@@ -1,4 +1,3 @@
-```markdown
 # My-GPT
 
 A production-oriented implementation of a small GPT-style language model built from scratch in PyTorch.
